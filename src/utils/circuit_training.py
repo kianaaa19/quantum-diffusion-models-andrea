@@ -44,14 +44,14 @@ def training(path, hyperparameters, data_length):
     # Initialize QEM if enabled
     qem = None
     if use_qem:
-        print(f"\n🛡️ Initializing Quantum Error Mitigation (method: {qem_method})...")
+        print(f"\n Initializing Quantum Error Mitigation (method: {qem_method})...")
         qem = QuantumErrorMitigation(mitigation_method=qem_method, num_qubits=num_qubits)
         
         # Note: Calibration for readout error mitigation would happen here
         # if you have access to the quantum device
         # For now, we'll skip actual calibration but the infrastructure is ready
         if qem_method in ['readout', 'both']:
-            print("⚠️  Readout error calibration skipped (implement based on your quantum backend)")
+            print("Readout error calibration skipped (implement based on your quantum backend)")
             # qem.calibrate_readout_error(your_quantum_device, num_shots=qem_calibration_shots)
 
     # Log all hyperparameters to tensorboard
