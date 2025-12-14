@@ -1,5 +1,4 @@
 # src.trainer.py
-
 import os
 import itertools
 from datetime import datetime
@@ -7,7 +6,6 @@ import sys
 import os
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(project_root)
-
 from src.utils.circuit_training import training
 
 # Define the list of possible values for each hyperparameter to search over
@@ -39,16 +37,29 @@ hyperparameters = {
     "ACT_depth":         [4], # Depth of the activation block (NNCPQC only)
     "num_ancilla":       [1],  # Number of ancilla qubits (NNCPQC only)
     "checkpoint":        [None], # specify a path to Params as '/path/Params/' to use that checkpoint
-    "pqc_layers":        [[2, 2, 2]] # depths for the three PQC blocks when model_type='PQC'
+    "pqc_layers":        [[2, 2, 2]], # depths for the three PQC blocks when model_type='PQC'
+    
+    # ==================== QEM PARAMETERS ====================
+    "use_qem":           [True],  # Enable Quantum Error Mitigation
+    "qem_method":        ['readout'],  # 'readout', 'zne', or 'both'
+    "qem_calibration_shots": [1000],  # Number of shots for calibration (if applicable)
+    
+    # ==================== QNGD PARAMETERS ====================
+    "use_qngd":          [True],  # Enable Quantum Natural Gradient Descent
+    "qngd_mode":         ['hybrid'],  # 'full', 'hybrid', or 'off'
+                                       # 'full': use QNGD for all PQC params
+                                       # 'hybrid': use QNGD for PQC + Adam for MLP
+                                       # 'off': use standard Adam only
+    "qngd_regularization": [1e-4],  # Regularization for QFIM inversion (numerical stability)
+    "qngd_update_frequency": [5],  # Update QFIM every N batches (computational efficiency)
+    "qngd_block_diag":   [True],  # Use block-diagonal approximation for QFIM (faster)
 }
 
-
-DATA_LENGTH = 8096 # number of samples in the dataset
-NUM_TRIALS = 2 # number of trials for each hyperparameter combination
+DATA_LENGTH = 8096  # number of samples in the dataset
+NUM_TRIALS = 2  # number of trials for each hyperparameter combination
 results_dir = 'results'
 
 # ================> DON'T MODIFY BELOW THIS LINE<================
-
 # create path to save weights and results
 timestr = datetime.now().strftime("%Y%m%d-%H%M%S")
 log_dir = os.path.join(os.getcwd(), results_dir, timestr)
@@ -65,6 +76,6 @@ for i, values in enumerate(all_combinations, start=1):
         
         # Ensure the path exists
         os.makedirs(path, exist_ok=True)
-
-        # extracute training
+        
+        # Execute training
         training(path, values, DATA_LENGTH)
