@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.models.ansatzes import NNCPQC, PQC
 from src.utils.schedule import make_schedule, device
-from src.utils.loss import infidelity_loss, LossHistory
+from src.utils.loss import infidelity_loss, LossHistory, QuantumErrorMitigation
 from src.utils.training_functions import assemble_input, assemble_mu_tilde
 from src.utils.plot_functions import show_mnist_alphas, log_generated_samples
 from src.data.load_data import load_mnist
@@ -26,7 +26,8 @@ def training(path, hyperparameters, data_length):
         model_type, num_layers, PQC_LR, MLP_LR, batch_size, num_epochs, scheduler_patience, scheduler_gamma,
         T, num_qubits, beta0, betaT, schedule, schedule_exponent, init_variance, wd_PQC, wd_MLP,
         desired_digits, inference_noise, load_epoch, activation,
-        MLP_width, MLP_depth, PQC_depth, ACT_depth, num_ancilla, checkpoint, pqc_layers
+        MLP_width, MLP_depth, PQC_depth, ACT_depth, num_ancilla, checkpoint, pqc_layers,
+        use_qem, qem_method, qem_calibration_shots  # NEW QEM parameters
     ) = hyperparameters
 
     model_type = model_type.lower()
@@ -40,23 +41,35 @@ def training(path, hyperparameters, data_length):
     params_dir = os.path.join(path, 'Params')
     logs_dir = os.path.join(path, 'Logs')
 
+    # Initialize QEM if enabled
+    qem = None
+    if use_qem:
+        print(f"\n🛡️ Initializing Quantum Error Mitigation (method: {qem_method})...")
+        qem = QuantumErrorMitigation(mitigation_method=qem_method, num_qubits=num_qubits)
+        
+        # Note: Calibration for readout error mitigation would happen here
+        # if you have access to the quantum device
+        # For now, we'll skip actual calibration but the infrastructure is ready
+        if qem_method in ['readout', 'both']:
+            print("⚠️  Readout error calibration skipped (implement based on your quantum backend)")
+            # qem.calibrate_readout_error(your_quantum_device, num_shots=qem_calibration_shots)
+
     # Log all hyperparameters to tensorboard
     writer = SummaryWriter(tensorboard_dir)
-    writer.add_hparams(
-        {
-            'model_type': model_type, 'num_layers': num_layers, 'PQC_LR': PQC_LR, 'MLP_LR': MLP_LR, 'batch_size': batch_size,
-            'num_epochs': num_epochs, 'scheduler_patience': scheduler_patience,
-            'scheduler_gamma': scheduler_gamma, 'time steps': T, 'num_qubits': num_qubits,
-            'beta0': beta0, 'betaT': betaT, 'schedule': schedule,
-            'schedule_exponent': schedule_exponent, 'wd_PQC': wd_PQC, 'wd_MLP': wd_MLP,
-            'init_variance': init_variance, 'desired_digits': torch.tensor(desired_digits),
-            'inference_noise': inference_noise, 'load_epoch': load_epoch,
-            'activation': activation, 'MLP_width': MLP_width, 'MLP_depth': MLP_depth,
-            'PQC_depth': PQC_depth, 'ACT_depth': ACT_depth, 'num_ancilla': num_ancilla, 'checkpoint': checkpoint,
-            'pqc_layers': torch.tensor(pqc_layers) if pqc_layers is not None else torch.tensor([])
-        },
-        {'hparam/best_loss': best_loss}
-    )
+    hparams_dict = {
+        'model_type': model_type, 'num_layers': num_layers, 'PQC_LR': PQC_LR, 'MLP_LR': MLP_LR, 'batch_size': batch_size,
+        'num_epochs': num_epochs, 'scheduler_patience': scheduler_patience,
+        'scheduler_gamma': scheduler_gamma, 'time steps': T, 'num_qubits': num_qubits,
+        'beta0': beta0, 'betaT': betaT, 'schedule': schedule,
+        'schedule_exponent': schedule_exponent, 'wd_PQC': wd_PQC, 'wd_MLP': wd_MLP,
+        'init_variance': init_variance, 'desired_digits': torch.tensor(desired_digits),
+        'inference_noise': inference_noise, 'load_epoch': load_epoch,
+        'activation': activation, 'MLP_width': MLP_width, 'MLP_depth': MLP_depth,
+        'PQC_depth': PQC_depth, 'ACT_depth': ACT_depth, 'num_ancilla': num_ancilla, 'checkpoint': checkpoint,
+        'pqc_layers': torch.tensor(pqc_layers) if pqc_layers is not None else torch.tensor([]),
+        'use_qem': use_qem, 'qem_method': qem_method  # Log QEM settings
+    }
+    writer.add_hparams(hparams_dict, {'hparam/best_loss': best_loss})
 
     # open necessary folders
     os.makedirs(path, exist_ok=True)
@@ -101,6 +114,10 @@ def training(path, hyperparameters, data_length):
     scheduler    = optim.lr_scheduler.StepLR(optimizer, step_size=scheduler_patience, gamma=scheduler_gamma)
     loss_monitor = LossHistory(logs_dir, len(data_loader))
     
+    # Statistics for QEM effectiveness
+    if use_qem:
+        qem_stats = {'total_batches': 0, 'avg_correction': 0.0}
+    
     # training loop
     for epoch in range(1, num_epochs + 1):
 
@@ -113,7 +130,7 @@ def training(path, hyperparameters, data_length):
         desc=f"Epoch {epoch}/{num_epochs}")
 
         # shape: (BS, 2^num_qubits)
-        for image_batch in data_loader:
+        for batch_idx, image_batch in enumerate(data_loader):
 
             optimizer.zero_grad()
 
@@ -137,9 +154,27 @@ def training(path, hyperparameters, data_length):
 
             # shape: (T, BS, 2^num_qubits)
             predicted_mu_t = circuit(input_batch)
+            
+            # Track QEM correction magnitude if enabled
+            if use_qem:
+                # Store original predictions for comparison
+                predicted_mu_t_original = predicted_mu_t.clone().detach()
 
-            # shape: (T,)
-            losses = infidelity_loss(predicted_mu_t, mu_tilde_t)
+            # shape: (T,) - now with QEM applied inside loss function
+            losses = infidelity_loss(predicted_mu_t, mu_tilde_t, qem=qem)
+            
+            # Calculate QEM effectiveness
+            if use_qem:
+                with torch.no_grad():
+                    losses_without_qem = infidelity_loss(predicted_mu_t_original, mu_tilde_t, qem=None)
+                    correction_magnitude = torch.mean(torch.abs(losses - losses_without_qem)).item()
+                    qem_stats['avg_correction'] += correction_magnitude
+                    qem_stats['total_batches'] += 1
+                    
+                    # Log QEM correction every 10 batches
+                    if batch_idx % 10 == 0:
+                        writer.add_scalar('QEM/correction_magnitude', correction_magnitude, 
+                                        loss_monitor.global_step)
 
             # save history
             loss_monitor.log_losses(losses, writer)
@@ -150,12 +185,24 @@ def training(path, hyperparameters, data_length):
             optimizer.step()
 
             # Update the progress bar with the current loss
-            epoch_progress_bar.set_postfix({'Loss': loss.item()})
+            postfix_dict = {'Loss': loss.item()}
+            if use_qem and batch_idx % 10 == 0:
+                postfix_dict['QEM_corr'] = f"{correction_magnitude:.4f}"
+            epoch_progress_bar.set_postfix(postfix_dict)
             epoch_progress_bar.update(1)
             epoch_losses.append(loss.detach().item())
 
-        # log epoch number and
+        # log epoch number
         writer.add_scalar('Epoch', epoch, epoch)
+        
+        # Log average QEM correction for the epoch
+        if use_qem and qem_stats['total_batches'] > 0:
+            avg_epoch_correction = qem_stats['avg_correction'] / qem_stats['total_batches']
+            writer.add_scalar('QEM/avg_correction_per_epoch', avg_epoch_correction, epoch)
+            print(f"  📊 QEM avg correction this epoch: {avg_epoch_correction:.6f}")
+            # Reset stats for next epoch
+            qem_stats['avg_correction'] = 0.0
+            qem_stats['total_batches'] = 0
 
         # adjust learning rate
         scheduler.step()
@@ -194,3 +241,5 @@ def training(path, hyperparameters, data_length):
             best_loss = epoch_loss_value
             writer.add_scalar('Best Total Loss', best_loss, epoch)
             circuit.save_params(params_dir, best=True)
+            if use_qem:
+                print(f"  New best loss: {best_loss:.6f} (with QEM)")
