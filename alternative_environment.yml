@@ -1,0 +1,12 @@
+name: qdm_venv
+channels:
+  - defaults
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.11
+  - numpy
+  - matplotlib
+  - tensorboard
+  - tqdm
+  - pip
