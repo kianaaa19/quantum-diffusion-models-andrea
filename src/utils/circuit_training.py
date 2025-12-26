@@ -17,6 +17,41 @@ from src.utils.training_functions import assemble_input, assemble_mu_tilde
 from src.utils.plot_functions import show_mnist_alphas, log_generated_samples
 from src.data.load_data import load_mnist
 
+
+class EarlyStopping:
+    """Early stopping to prevent overfitting and save training time."""
+    def __init__(self, patience=50, min_delta=1e-4):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.best_epoch = 0
+        
+    def __call__(self, current_score, epoch):
+        if self.best_score is None:
+            self.best_score = current_score
+            self.best_epoch = epoch
+            return False
+        
+        if current_score < (self.best_score - self.min_delta):
+            self.best_score = current_score
+            self.best_epoch = epoch
+            self.counter = 0
+        else:
+            self.counter += 1
+            
+        if self.counter >= self.patience:
+            self.early_stop = True
+            print(f"\nEarly stopping triggered!")
+            print(f"   Best epoch: {self.best_epoch}")
+            print(f"   Best score: {self.best_score:.6f}")
+            print(f"   No improvement for {self.patience} epochs")
+            return True
+        
+        return False
+
+
 def training(path, hyperparameters, data_length):
 
     # release memory
@@ -28,8 +63,10 @@ def training(path, hyperparameters, data_length):
         T, num_qubits, beta0, betaT, schedule, schedule_exponent, init_variance, wd_PQC, wd_MLP,
         desired_digits, inference_noise, load_epoch, activation,
         MLP_width, MLP_depth, PQC_depth, ACT_depth, num_ancilla, checkpoint, pqc_layers,
-        use_qem, qem_method, qem_calibration_shots,  # QEM parameters
-        use_qngd, qngd_mode, qngd_regularization, qngd_update_frequency, qngd_block_diag  # QNGD parameters
+        use_qem, qem_method, qem_calibration_shots,
+        use_qngd, qngd_mode, qngd_regularization, qngd_update_frequency, qngd_block_diag,
+        use_early_stopping, early_stop_patience, early_stop_min_delta,
+        use_local_loss
     ) = hyperparameters
 
     model_type = model_type.lower()
@@ -46,7 +83,7 @@ def training(path, hyperparameters, data_length):
     # Initialize QEM if enabled
     qem = None
     if use_qem:
-        print(f"\n🛡️ Initializing Quantum Error Mitigation (method: {qem_method})...")
+        print(f"\nInitializing Quantum Error Mitigation (method: {qem_method})...")
         qem = QuantumErrorMitigation(mitigation_method=qem_method, num_qubits=num_qubits)
         
         if qem_method in ['readout', 'both']:
@@ -66,7 +103,8 @@ def training(path, hyperparameters, data_length):
         'PQC_depth': PQC_depth, 'ACT_depth': ACT_depth, 'num_ancilla': num_ancilla, 'checkpoint': checkpoint,
         'pqc_layers': torch.tensor(pqc_layers) if pqc_layers is not None else torch.tensor([]),
         'use_qem': use_qem, 'qem_method': qem_method,
-        'use_qngd': use_qngd, 'qngd_mode': qngd_mode, 'qngd_regularization': qngd_regularization
+        'use_qngd': use_qngd, 'qngd_mode': qngd_mode, 'qngd_regularization': qngd_regularization,
+        'use_local_loss': use_local_loss
     }
     writer.add_hparams(hparams_dict, {'hparam/best_loss': best_loss})
 
@@ -87,10 +125,9 @@ def training(path, hyperparameters, data_length):
         circuit = NNCPQC(num_qubits, num_ancilla, num_layers, MLP_depth, MLP_width, PQC_depth, ACT_depth, T, init_variance, batch_size).to(device)
 
     # Initialize optimizer based on QNGD settings
-    print(f"\n⚙️  Initializing optimizer (QNGD mode: {qngd_mode})...")
+    print(f"\nInitializing optimizer (QNGD mode: {qngd_mode})...")
     
     if use_qngd and qngd_mode == 'full':
-        # Use QNGD for all PQC parameters
         optimizer = QNGDOptimizer(
             circuit.get_pqc_params(),
             lr=PQC_LR,
@@ -98,10 +135,9 @@ def training(path, hyperparameters, data_length):
             block_diagonal=qngd_block_diag,
             weight_decay=wd_PQC
         )
-        print("  ✓ Using full QNGD for PQC parameters")
+        print("  Using full QNGD for PQC parameters")
         
     elif use_qngd and qngd_mode == 'hybrid' and not is_pqc:
-        # Use QNGD for PQC + Adam for MLP (NNCPQC only)
         optimizer = HybridOptimizer(
             pqc_params=circuit.get_pqc_params(),
             mlp_params=circuit.get_mlp_params(),
@@ -112,10 +148,9 @@ def training(path, hyperparameters, data_length):
             mlp_weight_decay=wd_MLP,
             block_diagonal=qngd_block_diag
         )
-        print("  ✓ Using hybrid QNGD (PQC) + Adam (MLP)")
+        print("  Using hybrid QNGD (PQC) + Adam (MLP)")
         
     else:
-        # Standard Adam optimizer
         if is_pqc:
             optimizer = Adam([{'params': circuit.get_pqc_params(), 'lr': PQC_LR, 'weight_decay': wd_PQC}])
         else:
@@ -123,7 +158,7 @@ def training(path, hyperparameters, data_length):
                 {'params': circuit.get_pqc_params(), 'lr': PQC_LR, 'weight_decay': wd_PQC},
                 {'params': circuit.get_mlp_params(), 'lr': MLP_LR, 'weight_decay': wd_MLP}
             ])
-        print("  ✓ Using standard Adam optimizer")
+        print("  Using standard Adam optimizer")
 
     # load previous checkpoint if provided
     if checkpoint is not None:
@@ -146,14 +181,24 @@ def training(path, hyperparameters, data_length):
 
     # scheduler and loss monitor
     if isinstance(optimizer, (QNGDOptimizer, HybridOptimizer)):
-        # Custom scheduler handling for QNGD/Hybrid
-        scheduler = None  # We'll implement custom LR decay
+        scheduler = None
         current_lr_pqc = PQC_LR
         current_lr_mlp = MLP_LR if not is_pqc else None
     else:
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=scheduler_patience, gamma=scheduler_gamma)
     
     loss_monitor = LossHistory(logs_dir, len(data_loader))
+    
+    # Initialize early stopping
+    early_stopping = None
+    if use_early_stopping:
+        early_stopping = EarlyStopping(
+            patience=early_stop_patience,
+            min_delta=early_stop_min_delta
+        )
+        print(f"\nEarly stopping enabled:")
+        print(f"   Patience: {early_stop_patience} epochs")
+        print(f"   Min delta: {early_stop_min_delta}")
     
     # Statistics for QEM and QNGD
     if use_qem:
@@ -181,33 +226,49 @@ def training(path, hyperparameters, data_length):
 
             optimizer.zero_grad()
 
-            # shape: (BS*T)
-            t = torch.tensor(range(1, T+1), dtype=torch.long).repeat_interleave(batch_size).to(device)
+            # CURRICULUM LEARNING: Start with easy timesteps
+            if epoch < 50:
+                max_t = min(3, T)
+            elif epoch < 100:
+                max_t = min(5, T)
+            elif epoch < 200:
+                max_t = min(7, T)
+            else:
+                max_t = T
 
-            # shape: (BS*T, 2^num_qubits)
-            image_batch = image_batch.repeat(T, 1).to(device)
+            # shape: (BS*max_t)
+            t = torch.randint(1, max_t + 1, (batch_size * max_t,), dtype=torch.long, device=device)
 
-            # shape: (BS*T, 2^num_qubits)
+            # shape: (BS*max_t, 2^num_qubits)
+            image_batch = image_batch.repeat(max_t, 1).to(device)
+
+            # shape: (BS*max_t, 2^num_qubits)
             input_batch = assemble_input(image_batch, t, alphas_bar).to(torch.complex64)
             mu_tilde_t  = assemble_mu_tilde(image_batch, input_batch, t, alphas_bar, betas).to(torch.complex64)
 
-            # shape: (T, BS, 2^num_qubits)
-            input_batch = input_batch.view(T, batch_size, -1)
-            mu_tilde_t  = mu_tilde_t.view(T, batch_size, -1)
+            # shape: (max_t, BS, 2^num_qubits)
+            input_batch = input_batch.view(max_t, batch_size, -1)
+            mu_tilde_t  = mu_tilde_t.view(max_t, batch_size, -1)
 
-            # shape: (T, BS, 2^num_qubits)
+            # shape: (max_t, BS, 2^num_qubits)
             input_batch = input_batch/torch.norm(input_batch, p=2, dim=2, keepdim=True).to(torch.complex64)
             mu_tilde_t  = mu_tilde_t/torch.norm(mu_tilde_t, p=2, dim=2, keepdim=True).to(torch.complex64)
 
-            # shape: (T, BS, 2^num_qubits)
+            # shape: (max_t, BS, 2^num_qubits)
             predicted_mu_t = circuit(input_batch)
             
             # Track QEM correction magnitude if enabled
             if use_qem:
                 predicted_mu_t_original = predicted_mu_t.clone().detach()
 
-            # Compute loss with QEM
-            losses = infidelity_loss(predicted_mu_t, mu_tilde_t, qem=qem)
+            # Compute loss with QEM and local/global observable
+            losses = infidelity_loss(
+                predicted_mu_t, 
+                mu_tilde_t, 
+                qem=qem,
+                use_local=use_local_loss,
+                num_qubits=num_qubits
+            )
             
             # Calculate QEM effectiveness
             if use_qem:
@@ -228,9 +289,32 @@ def training(path, hyperparameters, data_length):
             loss = torch.mean(losses)
             loss.backward()
             
+            # Gradient clipping
+            max_grad_norm = 1.0
+            if use_qngd and isinstance(optimizer, (QNGDOptimizer, HybridOptimizer)):
+                if isinstance(optimizer, QNGDOptimizer):
+                    torch.nn.utils.clip_grad_norm_(optimizer.param_groups[0]['params'], max_grad_norm)
+                else:
+                    torch.nn.utils.clip_grad_norm_(optimizer.qngd_optimizer.param_groups[0]['params'], max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(optimizer.adam_optimizer.param_groups[0]['params'], max_grad_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(circuit.parameters(), max_grad_norm)
+            
+            # Monitor gradients
+            if batch_idx % 10 == 0:
+                total_norm = 0.0
+                for p in circuit.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm += param_norm.item() ** 2
+                total_norm = total_norm ** 0.5
+                writer.add_scalar('Gradients/total_norm', total_norm, loss_monitor.global_step)
+                
+                if total_norm < 1e-6:
+                    print(f"  Warning: Vanishing gradients detected (norm={total_norm:.2e})")
+            
             # Optimizer step with QNGD awareness
             if use_qngd and isinstance(optimizer, (QNGDOptimizer, HybridOptimizer)):
-                # Update QFIM periodically
                 update_qfim = (batch_idx % qngd_update_frequency == 0)
                 
                 if update_qfim:
@@ -253,7 +337,7 @@ def training(path, hyperparameters, data_length):
             if use_qem and batch_idx % 10 == 0:
                 postfix_dict['QEM'] = f"{correction_magnitude:.4f}"
             if use_qngd and batch_idx % qngd_update_frequency == 0:
-                postfix_dict['QFIM'] = '✓'
+                postfix_dict['QFIM'] = 'Y'
             epoch_progress_bar.set_postfix(postfix_dict)
             epoch_progress_bar.update(1)
             epoch_losses.append(loss.detach().item())
@@ -274,7 +358,6 @@ def training(path, hyperparameters, data_length):
             scheduler.step()
             current_lrs = scheduler.get_last_lr()
         else:
-            # Manual LR decay for QNGD/Hybrid
             if epoch % scheduler_patience == 0:
                 current_lr_pqc *= scheduler_gamma
                 if isinstance(optimizer, QNGDOptimizer):
@@ -323,3 +406,9 @@ def training(path, hyperparameters, data_length):
             if use_qngd:
                 improvement_msg += " (with QNGD)"
             print(f"  New best loss: {best_loss:.6f}{improvement_msg}")
+        
+        # Check early stopping
+        if early_stopping is not None:
+            if early_stopping(epoch_loss_value, epoch):
+                print(f"\nTraining stopped early at epoch {epoch}/{num_epochs}")
+                break
