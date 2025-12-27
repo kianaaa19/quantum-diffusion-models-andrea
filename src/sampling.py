@@ -13,7 +13,7 @@ from src.utils.schedule import make_schedule
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Sample MNIST-like images from a trained quantum diffusion model.")
+    parser = argparse.ArgumentParser(description="Sample FMNIST-like images from a trained quantum diffusion model.")
     parser.add_argument("--checkpoint", required=True, help="Path to the Params/ directory from training.")
     parser.add_argument("--model-type", choices=["PQC", "NNCPQC"], default="PQC")
     parser.add_argument("--num-qubits", type=int, default=8, help="Must satisfy 2^num_qubits = 256 for MNIST (16x16).")
