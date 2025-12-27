@@ -16,7 +16,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Sample FMNIST-like images from a trained quantum diffusion model.")
     parser.add_argument("--checkpoint", required=True, help="Path to the Params/ directory from training.")
     parser.add_argument("--model-type", choices=["PQC", "NNCPQC"], default="PQC")
-    parser.add_argument("--num-qubits", type=int, default=8, help="Must satisfy 2^num_qubits = 256 for MNIST (16x16).")
+    parser.add_argument("--num-qubits", type=int, default=8, help="Must satisfy 2^num_qubits = 256 for FMNIST (16x16).")
     parser.add_argument("--T", type=int, default=10, help="Number of diffusion steps.")
     parser.add_argument("--layers", type=int, nargs=3, default=[4, 4, 4], metavar=("L1", "L2", "L3"),
                         help="Depths for the three PQC blocks (PQC only).")
