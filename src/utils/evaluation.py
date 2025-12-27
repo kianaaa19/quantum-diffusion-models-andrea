@@ -9,9 +9,9 @@ from src.utils.schedule import get_default_device
 # Set device with safe fallback
 device = get_default_device()
 
-class MNISTClassifier(nn.Module):
+class FMNISTClassifier(nn.Module):
     def __init__(self):
-        super(MNISTClassifier, self).__init__()
+        super(FMNISTClassifier, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, 3, 1)
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
         self.dropout1 = nn.Dropout(0.25)
@@ -34,7 +34,7 @@ class MNISTClassifier(nn.Module):
         return x
 
 # Load the pre-trained classifier weights
-classifier = MNISTClassifier().to(device)
+classifier = FMNISTClassifier().to(device)
 classifier.load_state_dict(torch.load('models/mnist_cnn.pth', map_location=device, weights_only=True))
 classifier.eval()
 
