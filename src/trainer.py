@@ -12,22 +12,22 @@ from src.utils.circuit_training import training
 hyperparameters = {
     "model_type":        ["PQC"],  # choose between 'NNCPQC' and 'PQC'
     "num_layers":        [20],  # unitary+activation blocks for NNCPQC
-    "PQC_LR":            [5e-5],
-    "MLP_LR":            [5e-5],
+    "PQC_LR":            [1e-4, 5e-4],  # CHANGED: increased from 5e-5
+    "MLP_LR":            [1e-4, 5e-4],  # CHANGED: increased from 5e-5
     "batch_size":        [64],
     "num_epochs":        [2000],
     "scheduler_patience":[10],  # after how many epochs to reduce the learning rate
     "scheduler_gamma":   [0.97],  # factor by which to reduce the learning rate
     "T":                 [10],  # number of time steps in the diffusion process
-    "num_qubits":        [8],  # 2^8 = 256 amplitudes (16x16 MNIST patches)
+    "num_qubits":        [8],  # 2^8 = 256 amplitudes (16x16 Fashion-MNIST patches)
     "beta_0":            [1e-2],  # DDPM parameter
     "beta_T":            [1e-2],  # DDPM parameter
     "schedule":          ['linear'], # noise schedule type: 'linear' or 'cosine'
     "schedule_exponent": [0.5],  # exponent for the cosine schedule
-    "init_variance":     [0.7],  # initial variance of the parameters
+    "init_variance":     [0.05, 0.1, 0.2],  # CHANGED: reduced from 0.7 to avoid barren plateaus
     "wd_PQC":            [1e-5],  # L2 regularization
     "wd_MLP":            [1e-4],
-    "digits":            [[0, 1]],  # digits to train the model on
+    "digits":            [[0, 1]],  # Fashion-MNIST classes: 0=T-shirt, 1=Trouser
     "inference_noise":   [0.005],  # noise to add to the parameters during inference
     "load_epoch":        [None],  # checkpoint epoch (PQC only supports epoch checkpoints)
     "activation":        [True],  # whether to use activation function
@@ -47,12 +47,17 @@ hyperparameters = {
     # ==================== QNGD PARAMETERS ====================
     "use_qngd":          [True],  # Enable Quantum Natural Gradient Descent
     "qngd_mode":         ['hybrid'],  # 'full', 'hybrid', or 'off'
-                                       # 'full': use QNGD for all PQC params
-                                       # 'hybrid': use QNGD for PQC + Adam for MLP
-                                       # 'off': use standard Adam only
     "qngd_regularization": [1e-4],  # Regularization for QFIM inversion (numerical stability)
-    "qngd_update_frequency": [5],  # Update QFIM every N batches (computational efficiency)
+    "qngd_update_frequency": [3, 5],  # CHANGED: more frequent QFIM updates
     "qngd_block_diag":   [True],  # Use block-diagonal approximation for QFIM (faster)
+    
+    # ==================== EARLY STOPPING (NEW) ====================
+    "use_early_stopping": [True],  # Enable early stopping
+    "early_stop_patience": [100],  # Stop after 100 epochs without improvement
+    "early_stop_min_delta": [1e-4],  # Minimum improvement threshold
+    
+    # ==================== LOCAL LOSS (NEW - CRITICAL) ====================
+    "use_local_loss":    [True],  # Use local Pauli-Z loss to avoid barren plateaus
 }
 
 DATA_LENGTH = 8096  # number of samples in the dataset
