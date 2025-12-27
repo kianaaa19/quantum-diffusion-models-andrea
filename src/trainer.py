@@ -20,8 +20,8 @@ hyperparameters = {
     "scheduler_gamma":   [0.97],  # factor by which to reduce the learning rate
     "T":                 [10],  # number of time steps in the diffusion process
     "num_qubits":        [8],  # 2^8 = 256 amplitudes (16x16 Fashion-MNIST patches)
-    "beta_0":            [1e-2],  # DDPM parameter
-    "beta_T":            [1e-2],  # DDPM parameter
+    "beta_0":            [1e-4],  # DDPM parameter
+    "beta_T":            [2e-2],  # DDPM parameter
     "schedule":          ['linear'], # noise schedule type: 'linear' or 'cosine'
     "schedule_exponent": [0.5],  # exponent for the cosine schedule
     "init_variance":     [0.05, 0.1, 0.2],  # CHANGED: reduced from 0.7 to avoid barren plateaus
