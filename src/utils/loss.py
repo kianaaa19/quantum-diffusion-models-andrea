@@ -207,14 +207,76 @@ class QuantumErrorMitigation:
             return predictions
 
 
-def infidelity_loss(predictions, targets, qem: Optional[QuantumErrorMitigation] = None):
+def local_pauli_z_loss(predictions, targets, num_qubits=8):
     """
-    Compute infidelity loss with optional Quantum Error Mitigation.
+    Local observable loss using per-qubit Pauli-Z expectations.
+    Avoids barren plateaus by using local instead of global observables.
+    
+    Args:
+        predictions: (T, BS, 2^num_qubits) - model predictions
+        targets: (T, BS, 2^num_qubits) - target states
+        num_qubits: number of qubits
+        
+    Returns:
+        loss: (T,) - loss per timestep
+    """
+    T, BS = predictions.shape[0], predictions.shape[1]
+    
+    # Convert to probabilities
+    pred_probs = torch.abs(predictions) ** 2
+    target_probs = torch.abs(targets) ** 2
+    
+    # Compute local Z expectations for each qubit
+    total_loss = torch.zeros(T, device=predictions.device)
+    
+    for qubit_idx in range(num_qubits):
+        # Compute <Z_i> for predictions and targets
+        z_pred = compute_pauli_z_expectation(pred_probs, qubit_idx, num_qubits)
+        z_target = compute_pauli_z_expectation(target_probs, qubit_idx, num_qubits)
+        
+        # Add squared difference
+        total_loss += torch.mean((z_pred - z_target) ** 2, dim=-1)
+    
+    return total_loss / num_qubits
+
+
+def compute_pauli_z_expectation(probs, qubit_idx, num_qubits):
+    """
+    Compute <Z_i> expectation for qubit i.
+    
+    Args:
+        probs: (T, BS, 2^num_qubits) - probability distributions
+        qubit_idx: which qubit to measure
+        num_qubits: total number of qubits
+        
+    Returns:
+        z_exp: (T, BS) - Pauli-Z expectation values
+    """
+    T, BS, dim = probs.shape
+    z_exp = torch.zeros(T, BS, device=probs.device)
+    
+    # For each computational basis state
+    for basis_state in range(dim):
+        # Check if bit qubit_idx is 0 or 1
+        bit = (basis_state >> qubit_idx) & 1
+        sign = 1.0 - 2.0 * bit  # 0 → +1, 1 → -1
+        
+        z_exp += sign * probs[..., basis_state]
+    
+    return z_exp
+
+
+def infidelity_loss(predictions, targets, qem: Optional[QuantumErrorMitigation] = None, 
+                   use_local=False, num_qubits=8):
+    """
+    Compute infidelity loss with optional Quantum Error Mitigation and local/global observable.
     
     Args:
         predictions: quantum circuit outputs (complex tensors)
         targets: target quantum states (complex tensors)
         qem: QuantumErrorMitigation instance (optional)
+        use_local: if True, use local Pauli-Z loss (avoids barren plateaus)
+        num_qubits: number of qubits (needed for local loss)
     
     Returns:
         loss: mean infidelity across the batch
@@ -226,11 +288,12 @@ def infidelity_loss(predictions, targets, qem: Optional[QuantumErrorMitigation] 
     if qem is not None:
         predictions = qem.apply_mitigation(predictions, targets)
     
-    # shape: (T, BS, 2)
-    predictions_norm = predictions / torch.linalg.norm(predictions, dim=-1, keepdim=True)
-    # shape: (T, BS, 2)
-    targets_norm = targets / torch.linalg.norm(targets, dim=-1, keepdim=True)
-    # shape: (T, BS)
-    fidelity = torch.abs(torch.sum(torch.conj(predictions_norm) * targets_norm, dim=-1)) ** 2
-    # return the mean infidelity across the batch
-    return 1 - torch.mean(fidelity, dim=-1)
+    # Use local or global loss
+    if use_local:
+        return local_pauli_z_loss(predictions, targets, num_qubits)
+    else:
+        # Original global fidelity loss
+        predictions_norm = predictions / torch.linalg.norm(predictions, dim=-1, keepdim=True)
+        targets_norm = targets / torch.linalg.norm(targets, dim=-1, keepdim=True)
+        fidelity = torch.abs(torch.sum(torch.conj(predictions_norm) * targets_norm, dim=-1)) ** 2
+        return 1 - torch.mean(fidelity, dim=-1)
