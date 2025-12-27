@@ -226,7 +226,25 @@ def training(path, hyperparameters, data_length):
 
             optimizer.zero_grad()
 
-            # CURRICULUM LEARNING: Start with easy timesteps
+            # shape: (BS*T)
+            t = torch.tensor(range(1, T+1), dtype=torch.long).repeat_interleave(batch_size).to(device)
+
+            # shape: (BS*T, 2^num_qubits)
+            image_batch = image_batch.repeat(T, 1).to(device)
+
+            # shape: (BS*T, 2^num_qubits)
+            input_batch = assemble_input(image_batch, t, alphas_bar).to(torch.complex64)
+            mu_tilde_t  = assemble_mu_tilde(image_batch, input_batch, t, alphas_bar, betas).to(torch.complex64)
+
+            # shape: (T, BS, 2^num_qubits)
+            input_batch = input_batch.view(T, batch_size, -1)
+            mu_tilde_t  = mu_tilde_t.view(T, batch_size, -1)
+
+            # shape: (T, BS, 2^num_qubits)
+            input_batch = input_batch/torch.norm(input_batch, p=2, dim=2, keepdim=True).to(torch.complex64)
+            mu_tilde_t  = mu_tilde_t/torch.norm(mu_tilde_t, p=2, dim=2, keepdim=True).to(torch.complex64)
+
+            # CURRICULUM LEARNING: Determine which timesteps to train on
             if epoch < 50:
                 max_t = min(3, T)
             elif epoch < 100:
@@ -235,26 +253,12 @@ def training(path, hyperparameters, data_length):
                 max_t = min(7, T)
             else:
                 max_t = T
+            
+            # Create curriculum mask
+            curriculum_mask = torch.zeros(T, device=device, dtype=torch.bool)
+            curriculum_mask[:max_t] = True
 
-            # shape: (BS*max_t)
-            t = torch.randint(1, max_t + 1, (batch_size * max_t,), dtype=torch.long, device=device)
-
-            # shape: (BS*max_t, 2^num_qubits)
-            image_batch = image_batch.repeat(max_t, 1).to(device)
-
-            # shape: (BS*max_t, 2^num_qubits)
-            input_batch = assemble_input(image_batch, t, alphas_bar).to(torch.complex64)
-            mu_tilde_t  = assemble_mu_tilde(image_batch, input_batch, t, alphas_bar, betas).to(torch.complex64)
-
-            # shape: (max_t, BS, 2^num_qubits)
-            input_batch = input_batch.view(max_t, batch_size, -1)
-            mu_tilde_t  = mu_tilde_t.view(max_t, batch_size, -1)
-
-            # shape: (max_t, BS, 2^num_qubits)
-            input_batch = input_batch/torch.norm(input_batch, p=2, dim=2, keepdim=True).to(torch.complex64)
-            mu_tilde_t  = mu_tilde_t/torch.norm(mu_tilde_t, p=2, dim=2, keepdim=True).to(torch.complex64)
-
-            # shape: (max_t, BS, 2^num_qubits)
+            # shape: (T, BS, 2^num_qubits)
             predicted_mu_t = circuit(input_batch)
             
             # Track QEM correction magnitude if enabled
@@ -270,10 +274,14 @@ def training(path, hyperparameters, data_length):
                 num_qubits=num_qubits
             )
             
+            # Apply curriculum mask
+            losses = losses * curriculum_mask
+            
             # Calculate QEM effectiveness
             if use_qem:
                 with torch.no_grad():
-                    losses_without_qem = infidelity_loss(predicted_mu_t_original, mu_tilde_t, qem=None)
+                    losses_without_qem = infidelity_loss(predicted_mu_t_original, mu_tilde_t, qem=None, use_local=use_local_loss, num_qubits=num_qubits)
+                    losses_without_qem = losses_without_qem * curriculum_mask
                     correction_magnitude = torch.mean(torch.abs(losses - losses_without_qem)).item()
                     qem_stats['avg_correction'] += correction_magnitude
                     qem_stats['total_batches'] += 1
@@ -286,7 +294,7 @@ def training(path, hyperparameters, data_length):
             loss_monitor.log_losses(losses, writer)
 
             # Backpropagation
-            loss = torch.mean(losses)
+            loss = torch.sum(losses) / max_t
             loss.backward()
             
             # Gradient clipping
