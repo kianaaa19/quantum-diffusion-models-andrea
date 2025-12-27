@@ -14,7 +14,7 @@ MNIST-only quantum diffusion models with two architectures:
 
 ## Training
 - Run: `python3 -m src.trainer`
-- Hyperparameters live in `src/trainer.py` (`model_type`, learning rates, depths, digits, etc.). MNIST inputs are 16x16 (flattened to 256), so keep `num_qubits=8`.
+- Hyperparameters live in `src/trainer.py` (`model_type`, learning rates, depths, digits, etc.). FMNIST inputs are 16x16 (flattened to 256), so keep `num_qubits=8`.
 - Outputs per run go to `results/<timestamp>/run_*/trial_*/`:
   - `Params/` holds `current*.pt` and `best*.pt` checkpoints.
   - `TensorBoard/` contains scalars and sampled image grids (logged every 50 epochs).
