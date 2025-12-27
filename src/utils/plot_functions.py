@@ -13,7 +13,7 @@ device = get_default_device()
 
 
 def show_mnist_alphas(mnist_images, alphas_bar, writer, device, height=16, width=16):
-    """Visualize forward diffusion on a random MNIST sample."""
+    """Visualize forward diffusion on a random FMNIST sample."""
     mnist_images = mnist_images.to(device)
     idx = torch.randint(0, mnist_images.shape[0], size=(1,), device=device)
     image = mnist_images[idx].squeeze(0)  # Shape: (D,)
@@ -48,7 +48,7 @@ def show_mnist_alphas(mnist_images, alphas_bar, writer, device, height=16, width
         ax.tick_params(axis='both', which='both', length=0)
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    writer.add_figure('Forward diffusion (MNIST)', fig)
+    writer.add_figure('Forward diffusion (FMNIST)', fig)
     plt.close(fig)
 
 
